@@ -1,0 +1,391 @@
+{
+ "cells": [
+  {
+   "cell_type": "code",
+   "execution_count": 1,
+   "id": "8d577899",
+   "metadata": {
+    "_cell_guid": "b1076dfc-b9ad-4769-8c92-a6c4dae69d19",
+    "_uuid": "8f2839f25d086af736a60e9eeb907d3b93b6e0e5",
+    "execution": {
+     "iopub.execute_input": "2025-06-13T14:56:22.568201Z",
+     "iopub.status.busy": "2025-06-13T14:56:22.567774Z",
+     "iopub.status.idle": "2025-06-13T14:56:24.672075Z",
+     "shell.execute_reply": "2025-06-13T14:56:24.670920Z"
+    },
+    "papermill": {
+     "duration": 2.109757,
+     "end_time": "2025-06-13T14:56:24.673745",
+     "exception": false,
+     "start_time": "2025-06-13T14:56:22.563988",
+     "status": "completed"
+    },
+    "tags": []
+   },
+   "outputs": [
+    {
+     "name": "stdout",
+     "output_type": "stream",
+     "text": [
+      "/kaggle/input/fertilizer-prediction/Fertilizer-Prediction.csv\n",
+      "/kaggle/input/playground-series-s5e6/sample_submission.csv\n",
+      "/kaggle/input/playground-series-s5e6/train.csv\n",
+      "/kaggle/input/playground-series-s5e6/test.csv\n"
+     ]
+    }
+   ],
+   "source": [
+    "# This Python 3 environment comes with many helpful analytics libraries installed\n",
+    "# It is defined by the kaggle/python Docker image: https://github.com/kaggle/docker-python\n",
+    "# For example, here's several helpful packages to load\n",
+    "\n",
+    "import numpy as np # linear algebra\n",
+    "import pandas as pd # data processing, CSV file I/O (e.g. pd.read_csv)\n",
+    "\n",
+    "# Input data files are available in the read-only \"../input/\" directory\n",
+    "# For example, running this (by clicking run or pressing Shift+Enter) will list all files under the input directory\n",
+    "\n",
+    "import os\n",
+    "for dirname, _, filenames in os.walk('/kaggle/input'):\n",
+    "    for filename in filenames:\n",
+    "        print(os.path.join(dirname, filename))\n",
+    "\n",
+    "# You can write up to 20GB to the current directory (/kaggle/working/) that gets preserved as output when you create a version using \"Save & Run All\" \n",
+    "# You can also write temporary files to /kaggle/temp/, but they won't be saved outside of the current session"
+   ]
+  },
+  {
+   "cell_type": "code",
+   "execution_count": 2,
+   "id": "c37ceceb",
+   "metadata": {
+    "execution": {
+     "iopub.execute_input": "2025-06-13T14:56:24.679863Z",
+     "iopub.status.busy": "2025-06-13T14:56:24.679369Z",
+     "iopub.status.idle": "2025-06-13T14:56:26.809328Z",
+     "shell.execute_reply": "2025-06-13T14:56:26.808307Z"
+    },
+    "papermill": {
+     "duration": 2.134933,
+     "end_time": "2025-06-13T14:56:26.811300",
+     "exception": false,
+     "start_time": "2025-06-13T14:56:24.676367",
+     "status": "completed"
+    },
+    "tags": []
+   },
+   "outputs": [],
+   "source": [
+    "import os\n",
+    "os.environ['TF_CPP_MIN_LOG_LEVEL'] = '3'\n",
+    "import pandas as pd\n",
+    "pd.options.mode.copy_on_write = True\n",
+    "import numpy as np\n",
+    "import xgboost as xgb\n",
+    "from sklearn.model_selection import StratifiedKFold\n",
+    "from sklearn.preprocessing import LabelEncoder\n",
+    "from sklearn.metrics import accuracy_score\n",
+    "from typing import List\n",
+    "import warnings\n",
+    "warnings.simplefilter('ignore')"
+   ]
+  },
+  {
+   "cell_type": "code",
+   "execution_count": 3,
+   "id": "52a7bd01",
+   "metadata": {
+    "execution": {
+     "iopub.execute_input": "2025-06-13T14:56:26.816842Z",
+     "iopub.status.busy": "2025-06-13T14:56:26.816407Z",
+     "iopub.status.idle": "2025-06-13T14:56:28.515472Z",
+     "shell.execute_reply": "2025-06-13T14:56:28.514241Z"
+    },
+    "papermill": {
+     "duration": 1.70379,
+     "end_time": "2025-06-13T14:56:28.517278",
+     "exception": false,
+     "start_time": "2025-06-13T14:56:26.813488",
+     "status": "completed"
+    },
+    "tags": []
+   },
+   "outputs": [
+    {
+     "data": {
+      "text/plain": [
+       "((750000, 9), (250000, 9))"
+      ]
+     },
+     "execution_count": 3,
+     "metadata": {},
+     "output_type": "execute_result"
+    }
+   ],
+   "source": [
+    "# Load data\n",
+    "df_train = pd.read_csv(\"/kaggle/input/playground-series-s5e6/train.csv\")\n",
+    "df_orginal = pd.read_csv('/kaggle/input/fertilizer-prediction/Fertilizer-Prediction.csv')\n",
+    "df_test = pd.read_csv('/kaggle/input/playground-series-s5e6/test.csv')\n",
+    "\n",
+    "df_train.drop(columns=['id'], inplace=True)\n",
+    "df_test.drop(columns=['id'], inplace=True)\n",
+    "\n",
+    "# Convert categorical columns to 'category' dtype\n",
+    "for col in df_test.select_dtypes(include=['object']).columns:\n",
+    "    df_train[col] = df_train[col].astype('category')\n",
+    "    df_orginal[col] = df_orginal[col].astype('category')\n",
+    "    df_test[col] = df_test[col].astype('category')\n",
+    "\n",
+    "df_train['const'] = 0\n",
+    "df_orginal['const'] = 0\n",
+    "df_test['const'] = 0\n",
+    "\n",
+    "# Get Target column\n",
+    "target = df_train.pop('Fertilizer Name')\n",
+    "target_org = df_orginal.pop('Fertilizer Name')\n",
+    "\n",
+    "# Encode target labels\n",
+    "le = LabelEncoder()\n",
+    "target = le.fit_transform(target)\n",
+    "target_org = le.transform(target_org)\n",
+    "\n",
+    "df_train.shape, df_test.shape"
+   ]
+  },
+  {
+   "cell_type": "code",
+   "execution_count": 4,
+   "id": "ceeab262",
+   "metadata": {
+    "execution": {
+     "iopub.execute_input": "2025-06-13T14:56:28.523382Z",
+     "iopub.status.busy": "2025-06-13T14:56:28.523056Z",
+     "iopub.status.idle": "2025-06-13T14:56:28.530475Z",
+     "shell.execute_reply": "2025-06-13T14:56:28.528918Z"
+    },
+    "papermill": {
+     "duration": 0.013,
+     "end_time": "2025-06-13T14:56:28.532733",
+     "exception": false,
+     "start_time": "2025-06-13T14:56:28.519733",
+     "status": "completed"
+    },
+    "tags": []
+   },
+   "outputs": [],
+   "source": [
+    "def fast_map_k(actual: List[List], predicted: List[List], k: int = 3) -> float:\n",
+    "    total_score = 0.0\n",
+    "    \n",
+    "    for true_items, pred_items in zip(actual, predicted):\n",
+    "        if not true_items:\n",
+    "            continue\n",
+    "            \n",
+    "        pred_items = pred_items[:k]\n",
+    "        true_set = set(true_items)\n",
+    "        \n",
+    "        # Create boolean mask for hits\n",
+    "        hits = np.array([item in true_set for item in pred_items])\n",
+    "        \n",
+    "        if not hits.any():\n",
+    "            continue\n",
+    "        \n",
+    "        # Calculate cumulative hits and positions\n",
+    "        cumulative_hits = np.cumsum(hits)\n",
+    "        positions = np.arange(1, len(pred_items) + 1)\n",
+    "        \n",
+    "        # Calculate precision at each hit position\n",
+    "        precisions = cumulative_hits[hits] / positions[hits]\n",
+    "        score = np.sum(precisions) / min(len(true_items), k)\n",
+    "        total_score += score\n",
+    "    \n",
+    "    return total_score / len(actual)"
+   ]
+  },
+  {
+   "cell_type": "code",
+   "execution_count": 5,
+   "id": "3991d01f",
+   "metadata": {
+    "execution": {
+     "iopub.execute_input": "2025-06-13T14:56:28.539969Z",
+     "iopub.status.busy": "2025-06-13T14:56:28.539608Z",
+     "iopub.status.idle": "2025-06-13T19:50:46.767883Z",
+     "shell.execute_reply": "2025-06-13T19:50:46.767129Z"
+    },
+    "papermill": {
+     "duration": 17658.234081,
+     "end_time": "2025-06-13T19:50:46.769720",
+     "exception": false,
+     "start_time": "2025-06-13T14:56:28.535639",
+     "status": "completed"
+    },
+    "tags": []
+   },
+   "outputs": [
+    {
+     "name": "stdout",
+     "output_type": "stream",
+     "text": [
+      "Fold 1\n",
+      "[0]\ttrain-mlogloss:1.94570\tvalidation-mlogloss:1.94578\n",
+      "[2000]\ttrain-mlogloss:1.73519\tvalidation-mlogloss:1.89117\n",
+      "[3560]\ttrain-mlogloss:1.66901\tvalidation-mlogloss:1.88830\n",
+      "Score: 0.36755\n",
+      "\n",
+      "Fold 2\n",
+      "[0]\ttrain-mlogloss:1.94570\tvalidation-mlogloss:1.94578\n",
+      "[2000]\ttrain-mlogloss:1.73516\tvalidation-mlogloss:1.89040\n",
+      "[3607]\ttrain-mlogloss:1.66714\tvalidation-mlogloss:1.88706\n",
+      "Score: 0.36868\n",
+      "\n",
+      "Fold 3\n",
+      "[0]\ttrain-mlogloss:1.94570\tvalidation-mlogloss:1.94578\n",
+      "[2000]\ttrain-mlogloss:1.73517\tvalidation-mlogloss:1.88919\n",
+      "[4000]\ttrain-mlogloss:1.65588\tvalidation-mlogloss:1.88567\n",
+      "[4053]\ttrain-mlogloss:1.65453\tvalidation-mlogloss:1.88567\n",
+      "Score: 0.37012\n",
+      "\n",
+      "Fold 4\n",
+      "[0]\ttrain-mlogloss:1.94569\tvalidation-mlogloss:1.94579\n",
+      "[2000]\ttrain-mlogloss:1.73469\tvalidation-mlogloss:1.89108\n",
+      "[3640]\ttrain-mlogloss:1.66584\tvalidation-mlogloss:1.88812\n",
+      "Score: 0.36794\n",
+      "\n",
+      "Fold 5\n",
+      "[0]\ttrain-mlogloss:1.94570\tvalidation-mlogloss:1.94578\n",
+      "[2000]\ttrain-mlogloss:1.73543\tvalidation-mlogloss:1.89019\n",
+      "[3607]\ttrain-mlogloss:1.66758\tvalidation-mlogloss:1.88722\n",
+      "Score: 0.36848\n",
+      "\n",
+      "Overall Score: 0.36855\n"
+     ]
+    }
+   ],
+   "source": [
+    "FOLDS = 5\n",
+    "sk_fold = StratifiedKFold(n_splits=FOLDS, shuffle=True, random_state=42)\n",
+    "\n",
+    "oof = np.zeros((len(df_train), np.unique(target).shape[0]))\n",
+    "pred_test = np.zeros((len(df_test), np.unique(target).shape[0]))\n",
+    "final_score = 0\n",
+    "\n",
+    "params = {\n",
+    "        'objective': 'multi:softprob',\n",
+    "        'num_class': 7,\n",
+    "        'max_depth': 16,\n",
+    "        'learning_rate': 0.01,\n",
+    "        'n_estimators': 100_000,\n",
+    "        'reg_alpha': 3,\n",
+    "        'reg_lambda': 1.4,\n",
+    "        'gamma': 0.26,\n",
+    "        'max_delta_step': 5,\n",
+    "        'subsample': 0.86,\n",
+    "        'colsample_bytree': 0.4,\n",
+    "        'min_child_weight': 5,\n",
+    "        'random_state': 42,\n",
+    "        'n_jobs': -1,\n",
+    "        'eval_metric': 'mlogloss',\n",
+    "        'enable_categorical': True,\n",
+    "        'device': \"cuda\"   \n",
+    "}\n",
+    "\n",
+    "for i, (indx_train, indx_valid) in enumerate(sk_fold.split(df_train, target)):\n",
+    "    print(f\"Fold {i+1}\")\n",
+    "\n",
+    "    X_train, y_train = df_train.iloc[indx_train], target[indx_train]\n",
+    "    X_valid, y_valid = df_train.iloc[indx_valid], target[indx_valid]\n",
+    "    X_test = df_test.copy()\n",
+    "\n",
+    "    X_train = pd.concat([X_train, df_orginal], axis=0)\n",
+    "    y_train = np.concatenate([y_train, target_org], axis=0)\n",
+    "\n",
+    "    dtrain = xgb.DMatrix(X_train, label=y_train, enable_categorical=True)\n",
+    "    dval = xgb.DMatrix(X_valid, label=y_valid, enable_categorical=True)\n",
+    "    dtest = xgb.DMatrix(X_test, enable_categorical=True)\n",
+    "\n",
+    "    model = xgb.train(\n",
+    "        params, \n",
+    "        dtrain, \n",
+    "        num_boost_round=100_000, \n",
+    "        evals=[(dtrain, 'train'), (dval, 'validation')], \n",
+    "        early_stopping_rounds=30, \n",
+    "        verbose_eval=2000\n",
+    "    )\n",
+    "\n",
+    "    oof[indx_valid] = model.predict(dval)\n",
+    "    pred_test += model.predict(dtest)\n",
+    "\n",
+    "    top_preds = np.argsort(oof[indx_valid], axis=1)[:, -3:][:, ::-1]  \n",
+    "    score = fast_map_k([[label] for label in y_valid], top_preds)\n",
+    "    final_score += score\n",
+    "    print(f\"Score: {score:.5f}\\n\")\n",
+    "\n",
+    "final_score /= FOLDS\n",
+    "print(f\"Overall Score: {final_score:.5f}\")\n",
+    "\n",
+    "top_preds = np.argsort(pred_test, axis=1)[:, -3:][:, ::-1]\n",
+    "top_labels = le.inverse_transform(top_preds.ravel()).reshape(top_preds.shape)\n",
+    "\n",
+    "df_sub = pd.read_csv(\"/kaggle/input/playground-series-s5e6/sample_submission.csv\")\n",
+    "df_sub['Fertilizer Name'] = [' '.join(row) for row in top_labels]\n",
+    "\n",
+    "df_sub.to_csv('submission.csv', index=False)"
+   ]
+  }
+ ],
+ "metadata": {
+  "kaggle": {
+   "accelerator": "none",
+   "dataSources": [
+    {
+     "databundleVersionId": 12184666,
+     "sourceId": 91717,
+     "sourceType": "competition"
+    },
+    {
+     "datasetId": 7607534,
+     "sourceId": 12084971,
+     "sourceType": "datasetVersion"
+    }
+   ],
+   "dockerImageVersionId": 31040,
+   "isGpuEnabled": false,
+   "isInternetEnabled": true,
+   "language": "python",
+   "sourceType": "notebook"
+  },
+  "kernelspec": {
+   "display_name": "Python 3",
+   "language": "python",
+   "name": "python3"
+  },
+  "language_info": {
+   "codemirror_mode": {
+    "name": "ipython",
+    "version": 3
+   },
+   "file_extension": ".py",
+   "mimetype": "text/x-python",
+   "name": "python",
+   "nbconvert_exporter": "python",
+   "pygments_lexer": "ipython3",
+   "version": "3.11.11"
+  },
+  "papermill": {
+   "default_parameters": {},
+   "duration": 17670.909948,
+   "end_time": "2025-06-13T19:50:48.314150",
+   "environment_variables": {},
+   "exception": null,
+   "input_path": "__notebook__.ipynb",
+   "output_path": "__notebook__.ipynb",
+   "parameters": {},
+   "start_time": "2025-06-13T14:56:17.404202",
+   "version": "2.6.0"
+  }
+ },
+ "nbformat": 4,
+ "nbformat_minor": 5
+}
